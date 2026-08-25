@@ -1,0 +1,20 @@
+{
+  "baseUrl": "https://dify.kadindustries.org/v1",
+  "user": "hermes",
+  "registerProvider": false,
+  "apps": [
+    {
+      "name": "assistant",
+      "type": "chat",
+      "apiKey": "$DIFY_KEY_ASSISTANT",
+      "description": "General assistant app on Dify. Ask it a question; pass conversation_id to continue a thread."
+    },
+    {
+      "name": "trade_intel",
+      "type": "workflow",
+      "apiKey": "$DIFY_KEY_TRADE_INTEL",
+      "description": "Runs the trade-intelligence workflow. inputs: { hs_code, country, period }.",
+      "timeoutMs": 300000
+    }
+  ]
+}

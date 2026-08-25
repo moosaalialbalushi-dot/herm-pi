@@ -1,0 +1,47 @@
+# Drop-in overrides for a Dify docker compose deployment.
+#
+# Place beside Dify's docker-compose.yaml (in the `docker/` directory of a Dify
+# checkout) as docker-compose.override.yaml; compose merges it automatically.
+# Everything here is additive, so a Dify upgrade that replaces
+# docker-compose.yaml keeps these settings.
+#
+# Apply with: docker compose down && docker compose up -d
+
+services:
+  # Publish the bundled nginx on loopback only, so an external reverse proxy or
+  # a Cloudflare Tunnel is the sole public entry point. Comment this out if the
+  # bundled nginx is what serves the domain.
+  nginx:
+    ports:
+      - "127.0.0.1:8080:80"
+    restart: unless-stopped
+
+  api:
+    restart: unless-stopped
+    # Workflow runs and long generations are bounded by gunicorn's worker
+    # timeout, not just by nginx. Raise it before blaming the proxy for 504s.
+    environment:
+      GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-360}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  worker:
+    restart: unless-stopped
+
+  web:
+    restart: unless-stopped
+
+  db:
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    restart: unless-stopped
