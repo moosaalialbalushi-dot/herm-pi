@@ -77,7 +77,7 @@ export class DifyMcpServer {
 			return isNotification ? undefined : response;
 		} catch (error) {
 			if (isNotification) return undefined;
-			return this.errorResponse(id, INTERNAL_ERROR, error instanceof Error ? error.message : String(error));
+			return this.errorResponse(id, INTERNAL_ERROR, errorText(error));
 		}
 	}
 
@@ -200,6 +200,10 @@ function isJsonRpcId(value: unknown): value is JsonRpcId {
 	return typeof value === "string" || typeof value === "number" || value === null;
 }
 
+function errorText(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
 function errorEnvelope(id: JsonRpcId, code: number, message: string): Record<string, unknown> {
 	return { jsonrpc: "2.0", id, error: { code, message } };
 }
@@ -240,9 +244,19 @@ async function main(): Promise<void> {
 		if (stdinEnded && inFlight === 0 && pendingWrites === 0) process.exit(0);
 	};
 
+	// Total by construction: a throw here would escape the dispatch chains below
+	// as an unhandled rejection, and worse, would strand the counter it already
+	// incremented so shutdown never completes.
 	const write = (message: unknown): void => {
+		let line: string;
+		try {
+			line = `${JSON.stringify(message)}\n`;
+		} catch (error) {
+			console.error(`dify-mcp: dropping unserialisable message: ${errorText(error)}`);
+			return;
+		}
 		pendingWrites++;
-		process.stdout.write(`${JSON.stringify(message)}\n`, () => {
+		process.stdout.write(line, () => {
 			pendingWrites--;
 			exitWhenIdle();
 		});
@@ -276,11 +290,7 @@ async function main(): Promise<void> {
 		try {
 			return await server.handle(request);
 		} catch (error) {
-			return errorEnvelope(
-				request.id ?? null,
-				INTERNAL_ERROR,
-				error instanceof Error ? error.message : String(error),
-			);
+			return errorEnvelope(request.id ?? null, INTERNAL_ERROR, errorText(error));
 		}
 	};
 
@@ -312,6 +322,7 @@ async function main(): Promise<void> {
 			return;
 		}
 
+		// No .catch: handleEntry and write are both total, so this cannot reject.
 		inFlight++;
 		void handleEntry(parsed)
 			.then((response) => {
