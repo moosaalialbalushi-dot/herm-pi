@@ -7,9 +7,17 @@
  *   node integrations/dify/src/doctor.ts --self-test
  */
 
+import { pathToFileURL } from "node:url";
 import { DifyClient, parseSseStream } from "./client.ts";
 import { type DifyConfig, DifyConfigError, loadDifyConfig } from "./config.ts";
 import { describeError } from "./tools.ts";
+
+/**
+ * Probe timeout, deliberately shorter than the client's 120s request default: a
+ * health check that waits two minutes on a dead host is not a health check. An
+ * app that sets its own `timeoutMs` keeps it.
+ */
+const DOCTOR_TIMEOUT_MS = 15000;
 
 export interface DifyCheckResult {
 	app: string;
@@ -26,7 +34,7 @@ export async function checkApps(config: DifyConfig, signal?: AbortSignal): Promi
 			const client = new DifyClient({
 				baseUrl: app.baseUrl ?? config.baseUrl,
 				apiKey: app.apiKey,
-				timeoutMs: app.timeoutMs ?? 15000,
+				timeoutMs: app.timeoutMs ?? DOCTOR_TIMEOUT_MS,
 			});
 			const started = Date.now();
 			try {
@@ -54,7 +62,7 @@ export async function checkApps(config: DifyConfig, signal?: AbortSignal): Promi
 /** Render a check run as plain text for a terminal or a chat transcript. */
 export function formatReport(config: DifyConfig, results: DifyCheckResult[]): string {
 	const lines: string[] = [
-		`Dify base URL: ${config.baseUrl}`,
+		`Dify base URL: ${config.baseUrl || "(set per app)"}`,
 		`Config source: ${config.sourcePath ?? "environment variables"}`,
 		`End-user id:   ${config.user}`,
 		`Provider:      ${config.registerProvider ? "enabled" : "disabled"}`,
@@ -168,6 +176,8 @@ async function main(): Promise<void> {
 	if (results.some((result) => !result.ok)) process.exitCode = 1;
 }
 
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+// pathToFileURL, rather than a "file://" template: on Windows the raw path is
+// not a URL, so a string compare silently skips main().
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
 	await main();
 }

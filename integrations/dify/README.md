@@ -46,12 +46,12 @@ processes is a wider blast radius than this needs.
 
 | Field | Meaning |
 |---|---|
-| `baseUrl` | Service API root. `/v1` is appended when missing. |
+| `baseUrl` | Service API root, an absolute http(s) URL. `/v1` is appended when missing. Optional only if every app sets its own. |
 | `user` | End-user id Dify attributes calls to; shows up in Dify's logs. |
 | `apps[].name` | `^[a-z][a-z0-9_]*$`. Becomes the tool name `dify_<name>`. |
 | `apps[].type` | `chat`, `completion`, or `workflow`. Must match the app in Dify. |
 | `apps[].description` | Tool description shown to the model. Name the expected `inputs` here — it is what makes the model call the app correctly. |
-| `apps[].timeoutMs` | Per-app request timeout. Default 120000. Raise for slow workflows. |
+| `apps[].timeoutMs` | Per-app request timeout, a positive integer in milliseconds. Default 120000. Behind a Cloudflare proxy a blocking call is capped at ~100s regardless (524), so raising this past that only helps on a DNS-only or origin URL. |
 | `registerProvider` | Expose chat apps as pi models. Off by default; see caveats below. |
 
 Config is searched in this order, first hit wins:

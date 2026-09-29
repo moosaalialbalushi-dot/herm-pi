@@ -14,7 +14,7 @@
       "type": "workflow",
       "apiKey": "$DIFY_KEY_TRADE_INTEL",
       "description": "Runs the trade-intelligence workflow. inputs: { hs_code, country, period }.",
-      "timeoutMs": 300000
+      "timeoutMs": 90000
     }
   ]
 }

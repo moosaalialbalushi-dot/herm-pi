@@ -10,6 +10,9 @@
 #
 #   DIFY_API_KEY=app-xxxx ./healthcheck.sh
 #
+# The key is passed to curl through a config on stdin, never on the command
+# line, so it does not show up in the process table.
+#
 # Exit status is non-zero if any check fails.
 
 set -uo pipefail
@@ -24,9 +27,21 @@ info() { printf '  --   %s\n' "$1"; }
 
 printf '\nDify healthcheck: %s\n\n' "$BASE"
 
-host="${BASE#*://}"
-host="${host%%/*}"
-host="${host%%:*}"
+# Split the authority into host and port, keeping a bracketed IPv6 literal
+# intact. A non-default port must survive into the TLS check, or it inspects
+# the wrong endpoint.
+authority="${BASE#*://}"
+authority="${authority%%/*}"
+case "$authority" in
+   \[*\]:*) host="${authority%]:*}"; host="${host#[}"; port="${authority##*]:}" ;;
+   \[*\])   host="${authority#[}"; host="${host%]}"; port="" ;;
+   *:*)     host="${authority%:*}"; port="${authority##*:}" ;;
+   *)       host="$authority"; port="" ;;
+esac
+if [ -n "$port" ]; then connect_target="$authority"; else connect_target="$authority:443"; fi
+
+# Emit a curl config carrying the auth header, for `curl -K -`.
+auth_config() { printf 'header = "Authorization: Bearer %s"\n' "$DIFY_API_KEY"; }
 
 # --- DNS ---------------------------------------------------------------------
 printf 'DNS\n'
@@ -38,10 +53,7 @@ fi
 
 # --- Reachability and TLS ----------------------------------------------------
 printf '\nHTTP\n'
-headers="$(curl -sS -I --max-time 20 "$BASE/" 2>&1)"
-if [ $? -ne 0 ]; then
-   fail "cannot reach $BASE — $headers"
-else
+if headers="$(curl -sS -I --max-time 20 "$BASE/" 2>&1)"; then
    status="$(printf '%s' "$headers" | head -1 | awk '{print $2}')"
    case "$status" in
       200|301|302|307|308) pass "root responds $status" ;;
@@ -57,18 +69,17 @@ else
    else
       info "no Cloudflare proxy headers seen (DNS-only, tunnel, or direct origin)"
    fi
+else
+   fail "cannot reach $BASE — $headers"
 fi
 
 if [ "${BASE#https://}" != "$BASE" ]; then
-   if expiry="$(echo | openssl s_client -servername "$host" -connect "$host:443" 2>/dev/null \
-      | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)"; then
-      if [ -n "$expiry" ]; then
-         pass "TLS certificate valid until $expiry"
-      else
-         fail "could not read the TLS certificate"
-      fi
+   # openssl s_client waits forever on a stalled handshake without a timeout.
+   if expiry="$(echo | timeout 20s openssl s_client -servername "$host" -connect "$connect_target" 2>/dev/null \
+      | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)" && [ -n "$expiry" ]; then
+      pass "TLS certificate for $connect_target valid until $expiry"
    else
-      fail "TLS handshake failed"
+      fail "TLS handshake with $connect_target failed or timed out"
    fi
 fi
 
@@ -90,35 +101,35 @@ printf '\nService API\n'
 if [ -z "${DIFY_API_KEY:-}" ]; then
    info "DIFY_API_KEY not set — skipping /v1 checks (set it to test keys and streaming)"
 else
-   info_body="$(curl -sS --max-time 20 -H "Authorization: Bearer $DIFY_API_KEY" "$BASE/v1/info" 2>&1)"
+   info_body="$(auth_config | curl -K - -sS --max-time 20 "$BASE/v1/info" 2>&1)"
    if printf '%s' "$info_body" | grep -q '"name"'; then
       pass "GET /v1/info authenticated: $(printf '%s' "$info_body" | head -c 160)"
    else
       fail "GET /v1/info failed: $(printf '%s' "$info_body" | head -c 200)"
    fi
 
-   # time_starttransfer on a streaming request is the buffering test: an
-   # unbuffered SSE stream delivers its first byte in a second or two, while a
-   # buffered one only "starts" once the whole answer is generated.
+   # Time the first byte of the response BODY, not the headers. A buffering
+   # proxy forwards the headers immediately and holds the events back, so
+   # curl's time_starttransfer would call a buffered stream unbuffered.
    printf '\nStreaming\n'
-   timing="$(curl -sS -o /dev/null --max-time 60 \
-      -w '%{http_code} %{time_starttransfer}' \
-      -H "Authorization: Bearer $DIFY_API_KEY" \
-      -H 'Content-Type: application/json' \
-      -d '{"query":"Reply with the single word: ok","inputs":{},"response_mode":"streaming","user":"healthcheck","conversation_id":""}' \
-      "$BASE/v1/chat-messages" 2>&1)"
-   code="$(printf '%s' "$timing" | awk '{print $1}')"
-   ttfb="$(printf '%s' "$timing" | awk '{print $2}')"
-   if [ "$code" = "200" ]; then
-      if awk "BEGIN{exit !($ttfb < 10)}" 2>/dev/null; then
-         pass "streaming first byte after ${ttfb}s — not buffered"
+   stream_started=$SECONDS
+   first_byte="$(
+      auth_config | curl -K - -sS -N --max-time 60 \
+         -H 'Content-Type: application/json' \
+         -d '{"query":"Reply with the single word: ok","inputs":{},"response_mode":"streaming","user":"healthcheck","conversation_id":""}' \
+         "$BASE/v1/chat-messages" 2>/dev/null \
+         | head -c 1
+   )"
+   stream_elapsed=$((SECONDS - stream_started))
+
+   if [ -n "$first_byte" ]; then
+      if [ "$stream_elapsed" -lt 10 ]; then
+         pass "first SSE body byte after ${stream_elapsed}s — not buffered"
       else
-         fail "streaming first byte after ${ttfb}s — a proxy is buffering the SSE response"
+         fail "first SSE body byte after ${stream_elapsed}s — a proxy is buffering the SSE response"
       fi
-   elif [ "$code" = "404" ]; then
-      info "chat streaming returned 404 — this key belongs to a workflow or completion app, not a chat app"
    else
-      fail "streaming request returned $code"
+      fail "streaming request returned no body (wrong app type for chat, auth failure, or a proxy error)"
    fi
 fi
 

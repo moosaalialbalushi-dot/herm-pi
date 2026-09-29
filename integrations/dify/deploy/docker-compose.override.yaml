@@ -6,14 +6,17 @@
 # docker-compose.yaml keeps these settings.
 #
 # Apply with: docker compose down && docker compose up -d
+#
+# NOTE ON PORTS: Compose merges `ports` by appending, never by replacing, so an
+# override cannot take a published port away. To stop the bundled nginx holding
+# the public ports — which you must do before fronting Dify with your own nginx
+# or a Cloudflare Tunnel — set these in Dify's .env instead:
+#
+#   EXPOSE_NGINX_PORT=127.0.0.1:8080
+#   EXPOSE_NGINX_SSL_PORT=127.0.0.1:8443
 
 services:
-  # Publish the bundled nginx on loopback only, so an external reverse proxy or
-  # a Cloudflare Tunnel is the sole public entry point. Comment this out if the
-  # bundled nginx is what serves the domain.
   nginx:
-    ports:
-      - "127.0.0.1:8080:80"
     restart: unless-stopped
 
   api:

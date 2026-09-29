@@ -11,8 +11,9 @@ Adjust paths to match the VM; everything else is verbatim.
 ## 1. Put the code on the VM
 
 The server imports only `client.ts`, `config.ts` and `tools.ts`, all
-dependency-free, and Node runs the TypeScript directly (type stripping, Node
-22.6+ — the repo already requires 22.19).
+dependency-free, and Node runs the TypeScript directly. Type stripping is on by
+default from Node 22.18; on 22.6 to 22.17 it exists but needs
+`--experimental-strip-types`. The repo floor of 22.19 is comfortably past that.
 
 ```bash
 sudo git clone https://github.com/moosaalialbalushi-dot/herm-pi /opt/herm-pi
@@ -27,8 +28,16 @@ No `npm install`. Nothing to build.
 sudo mkdir -p /etc/hermes
 sudo cp /opt/herm-pi/integrations/dify/dify.config.example.json /etc/hermes/dify.config.json
 sudo $EDITOR /etc/hermes/dify.config.json
+
+# Give it to the account that launches Hermes, then lock it to that account.
+# Left root-owned at 0600 the MCP server cannot read its own config.
+sudo chown hermes:hermes /etc/hermes/dify.config.json
 sudo chmod 600 /etc/hermes/dify.config.json
 ```
+
+Replace `hermes:hermes` with whichever user runs the agent. If you would rather
+not involve root at all, keep the file in that account's home directory and
+point `--config` at it.
 
 Keep the keys out of the file and in the environment:
 

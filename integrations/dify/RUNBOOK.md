@@ -19,10 +19,11 @@ actually breaks. Run the healthcheck first and work from what it reports.
 
 ## First moves
 
-From anywhere:
+From anywhere, using the repository's real path (this one assumes the clone in
+HERMES.md; adjust if yours differs):
 
 ```bash
-DIFY_API_KEY=app-xxxx ./integrations/dify/deploy/healthcheck.sh
+DIFY_API_KEY=app-xxxx /opt/herm-pi/integrations/dify/deploy/healthcheck.sh
 ```
 
 On the VM, in the Dify `docker/` directory:
@@ -160,17 +161,37 @@ cannot override:
 
 ```bash
 cd /path/to/dify/docker
-cp docker-compose.override.yaml .          # from integrations/dify/deploy/, once
-$EDITOR .env                               # keys from deploy/dify.env.example
+cp /opt/herm-pi/integrations/dify/deploy/docker-compose.override.yaml .
+$EDITOR .env
 docker compose down
 docker compose up -d
 docker compose ps
 ```
 
+The `.env` keys that matter are annotated in
+`integrations/dify/deploy/dify.env.example`.
+
 `down` then `up` rather than `restart`: nginx renders its configuration from
 `.env` at container start.
 
 ## Upgrading
+
+Back up before anything else. Once `docker compose up -d` has run, migrations
+have already touched the database and the pre-upgrade state is gone:
+
+```bash
+cd /path/to/dify/docker
+docker compose exec -T db pg_dumpall -U postgres > dify-$(date +%F).sql
+cp .env .env.backup-$(date +%F)
+ls -lh dify-$(date +%F).sql
+```
+
+Check that dump is a real size before continuing — a zero-byte file means the
+service name or database user is different on your version. `docker compose ps`
+lists the actual service names; Dify 1.16 calls it `db_postgres` rather than
+`db`, and a separate `pgvector` service holds knowledge-base embeddings.
+
+Then upgrade:
 
 ```bash
 cd /path/to/dify
@@ -180,14 +201,6 @@ docker compose down
 docker compose pull
 docker compose up -d
 docker compose logs -f api        # watch migrations complete
-```
-
-Back up first — at minimum the `db` volume and `docker/.env`, which holds
-`SECRET_KEY`:
-
-```bash
-docker compose exec db pg_dumpall -U postgres > dify-$(date +%F).sql
-cp docker/.env docker/.env.backup-$(date +%F)
 ```
 
 Because `docker-compose.override.yaml` is a separate file, an upgrade that

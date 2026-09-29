@@ -194,6 +194,8 @@ export function describeError(error: unknown, app?: DifyAppConfig): string {
 				return `${target}: ${error.message}. Rate limited by Dify or by the upstream model provider.`;
 			case 504:
 				return `${target}: ${error.message}. The proxy timed out before Dify answered; raise proxy_read_timeout for long workflows.`;
+			case 524:
+				return `${target}: ${error.message}. Cloudflare gives the origin ~100s to return the first byte. Run long workflows in streaming mode, or serve the Service API on a DNS-only hostname.`;
 			default:
 				return `${target}: ${error.message}`;
 		}

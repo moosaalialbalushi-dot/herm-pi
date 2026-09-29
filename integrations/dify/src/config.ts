@@ -106,10 +106,11 @@ function configFromEnv(): DifyConfig | undefined {
 	if (!APP_TYPES.includes(type)) {
 		problems.push(`DIFY_APP_TYPE "${type}" must be one of ${APP_TYPES.join(", ")}`);
 	}
-	if (problems.length > 0) throw new DifyConfigError(problems);
+	const resolvedBaseUrl = validateBaseUrl(baseUrl, "DIFY_BASE_URL", problems);
+	if (problems.length > 0 || !resolvedBaseUrl) throw new DifyConfigError(problems);
 
 	return {
-		baseUrl: normalizeBaseUrl(baseUrl),
+		baseUrl: resolvedBaseUrl,
 		user: process.env.DIFY_USER ?? "pi-agent",
 		apps: [{ name, type, apiKey, provider: type === "chat" }],
 		registerProvider: process.env.DIFY_AS_PROVIDER === "1",
@@ -129,9 +130,7 @@ export function parseDifyConfig(raw: unknown, sourcePath?: string): DifyConfig {
 	const doc = raw as Record<string, unknown>;
 
 	const baseUrlRaw = typeof doc.baseUrl === "string" ? resolveValue(doc.baseUrl) : process.env.DIFY_BASE_URL;
-	if (!baseUrlRaw) {
-		problems.push(`${where}"baseUrl" is required (or set DIFY_BASE_URL)`);
-	}
+	const topLevelBaseUrl = baseUrlRaw ? validateBaseUrl(baseUrlRaw, `${where}"baseUrl"`, problems) : undefined;
 
 	const apps: DifyAppConfig[] = [];
 	const seen = new Set<string>();
@@ -173,22 +172,40 @@ export function parseDifyConfig(raw: unknown, sourcePath?: string): DifyConfig {
 
 			if (problems.length > 0 && (!name || !apiKey)) return;
 
+			// An unresolved $VAR here would otherwise normalize to a bare "/v1" and
+			// silently override a perfectly good top-level URL.
+			let baseUrl: string | undefined;
+			if (typeof app.baseUrl === "string") {
+				baseUrl = validateBaseUrl(resolveValue(app.baseUrl), `${at}: "baseUrl"`, problems);
+			}
+
+			let timeoutMs: number | undefined;
+			if (app.timeoutMs !== undefined) {
+				timeoutMs = validateTimeoutMs(app.timeoutMs, `${at}: "timeoutMs"`, problems);
+			}
+
 			apps.push({
 				name,
 				type,
 				apiKey,
 				description: typeof app.description === "string" ? app.description : undefined,
-				baseUrl: typeof app.baseUrl === "string" ? normalizeBaseUrl(resolveValue(app.baseUrl)) : undefined,
-				timeoutMs: typeof app.timeoutMs === "number" ? app.timeoutMs : undefined,
+				baseUrl,
+				timeoutMs,
 				provider: app.provider === true || (app.provider === undefined && type === "chat"),
 			});
 		});
 	}
 
+	// apps[].baseUrl exists so one config can span several Dify instances, so the
+	// top-level value is only needed by apps that do not carry their own.
+	if (!topLevelBaseUrl && apps.some((app) => !app.baseUrl)) {
+		problems.push(`${where}"baseUrl" is required (or set DIFY_BASE_URL) unless every app sets its own`);
+	}
+
 	if (problems.length > 0) throw new DifyConfigError(problems);
 
 	return {
-		baseUrl: normalizeBaseUrl(baseUrlRaw as string),
+		baseUrl: topLevelBaseUrl ?? "",
 		user: typeof doc.user === "string" ? resolveValue(doc.user) : (process.env.DIFY_USER ?? "pi-agent"),
 		apps,
 		registerProvider: doc.registerProvider === true || process.env.DIFY_AS_PROVIDER === "1",
@@ -217,4 +234,45 @@ export function resolveValue(value: string): string {
 export function normalizeBaseUrl(baseUrl: string): string {
 	const trimmed = baseUrl.trim().replace(/\/+$/, "");
 	return /\/v\d+$/.test(trimmed) ? trimmed : `${trimmed}/v1`;
+}
+
+/**
+ * Normalize a base URL, rejecting anything that is not an absolute http(s) URL.
+ *
+ * Returns undefined and records a problem on failure, so a bad value surfaces at
+ * load time rather than as a confusing 404 on the first call.
+ */
+function validateBaseUrl(value: string, label: string, problems: string[]): string | undefined {
+	const trimmed = value.trim();
+	if (!trimmed) {
+		problems.push(`${label} resolved to an empty string (is the referenced variable exported?)`);
+		return undefined;
+	}
+	let parsed: URL;
+	try {
+		parsed = new URL(trimmed);
+	} catch {
+		problems.push(`${label} must be an absolute URL (got ${JSON.stringify(value)})`);
+		return undefined;
+	}
+	if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+		problems.push(`${label} must use http or https (got ${JSON.stringify(parsed.protocol)})`);
+		return undefined;
+	}
+	return normalizeBaseUrl(trimmed);
+}
+
+/**
+ * Bound a configured timeout to what `AbortSignal.timeout` actually honours.
+ *
+ * Zero or a negative value aborts the request the moment it starts, and anything
+ * past the 32-bit timer ceiling throws, either of which makes that app unusable.
+ */
+function validateTimeoutMs(value: unknown, label: string, problems: string[]): number | undefined {
+	const MAX_TIMEOUT_MS = 2147483647;
+	if (typeof value !== "number" || !Number.isInteger(value) || value <= 0 || value > MAX_TIMEOUT_MS) {
+		problems.push(`${label} must be an integer between 1 and ${MAX_TIMEOUT_MS} (got ${JSON.stringify(value)})`);
+		return undefined;
+	}
+	return value;
 }

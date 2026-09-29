@@ -129,7 +129,10 @@ export default function difyExtension(pi: ExtensionAPI): void {
 					description,
 					promptSnippet: `Ask the "${app.name}" Dify app`,
 					parameters: CHAT_PARAMS,
-					executionMode: "parallel",
+					// Dify holds the conversation state, so two concurrent calls on one
+					// thread would interleave. Completion and workflow apps stay parallel
+					// because each of their requests is self-contained.
+					executionMode: "sequential",
 					async execute(_toolCallId, params, signal) {
 						const result = await runDifyApp(
 							clientFor(app),
@@ -247,7 +250,11 @@ function createDifyStream(
 				const query = lastUserText(context);
 				if (!query) throw new Error("No user message to send to Dify");
 
-				const threadKey = `${model.id}:${firstUserText(context).slice(0, 200)}`;
+				// Keyed by pi's session id, not by prompt text: two sessions whose
+				// opening prompts share a prefix would otherwise land in the same Dify
+				// conversation. Without a session id every thread on this model shares
+				// one Dify conversation, which is the best that can be done blind.
+				const threadKey = `${model.id}:${options?.sessionId ?? "no-session"}`;
 				const block = { type: "text" as const, text: "" };
 				output.content.push(block);
 				const contentIndex = output.content.length - 1;
@@ -307,13 +314,6 @@ function createDifyStream(
 function lastUserText(context: Context): string {
 	for (let index = context.messages.length - 1; index >= 0; index--) {
 		const message = context.messages[index];
-		if (message.role === "user") return messageText(message);
-	}
-	return "";
-}
-
-function firstUserText(context: Context): string {
-	for (const message of context.messages) {
 		if (message.role === "user") return messageText(message);
 	}
 	return "";
